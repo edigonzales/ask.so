@@ -2,6 +2,7 @@ package ch.so.agi.rrb;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.URLDecoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpRequest;
@@ -27,7 +28,7 @@ class RrbFetchService {
 
     static final String PDF_MIME_TYPE = "application/pdf";
 
-    private static final String USER_AGENT = "ask-so-mcp/0.1";
+    static final String USER_AGENT = "ask-so-mcp/0.1";
 
     private static final String DETAIL_TABLE_SELECTOR = "table.tx-rrbpublications.table.detailview";
 
@@ -60,7 +61,7 @@ class RrbFetchService {
                 rrbNumber,
                 detailPageUri.toString(),
                 publicPdfUrl,
-                resourceUri(year, rrbNumber),
+                pdfResourceUri(year, rrbNumber),
                 pdfDownload.filename(),
                 pdfDownload.mimeType(),
                 pdfDownload.bytes());
@@ -84,8 +85,19 @@ class RrbFetchService {
         }
     }
 
-    String resourceUri(int year, int rrbNumber) {
+    String pdfResourceUri(int year, int rrbNumber) {
         return "rrb://so.ch/regierungsratsbeschluss/%d/%d/rrb.pdf".formatted(year, rrbNumber);
+    }
+
+    void validatePositive(int value, String fieldName) {
+        if (value <= 0) {
+            throw error("INVALID_INPUT", "%s muss grösser als 0 sein.".formatted(fieldName),
+                    Map.of("field", fieldName, "value", value));
+        }
+    }
+
+    RrbFetchException error(String errorCode, String message, Map<String, Object> details) {
+        return new RrbFetchException(errorCode, message, new LinkedHashMap<>(details));
     }
 
     private URI detailPageUri(int year, int rrbNumber) {
@@ -211,13 +223,6 @@ class RrbFetchService {
         return properties.getRequestTimeout();
     }
 
-    private void validatePositive(int value, String fieldName) {
-        if (value <= 0) {
-            throw error("INVALID_INPUT", "%s muss grösser als 0 sein.".formatted(fieldName),
-                    Map.of("field", fieldName, "value", value));
-        }
-    }
-
     private Optional<String> extractFilename(HttpHeaders headers) {
         return headers.firstValue("content-disposition")
                 .flatMap(value -> {
@@ -227,7 +232,7 @@ class RrbFetchService {
                     }
 
                     String rawFilename = matcher.group(1).replace("\"", "");
-                    return Optional.of(java.net.URLDecoder.decode(rawFilename, StandardCharsets.UTF_8));
+                    return Optional.of(URLDecoder.decode(rawFilename, StandardCharsets.UTF_8));
                 });
     }
 
@@ -241,10 +246,6 @@ class RrbFetchService {
 
     private String normalize(String value) {
         return value == null ? "" : value.trim().replaceAll("\\s+", " ");
-    }
-
-    private RrbFetchException error(String errorCode, String message, Map<String, Object> details) {
-        return new RrbFetchException(errorCode, message, new LinkedHashMap<>(details));
     }
 
     private record PdfDownload(String filename, String mimeType, byte[] bytes) {

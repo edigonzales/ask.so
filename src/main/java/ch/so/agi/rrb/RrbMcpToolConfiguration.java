@@ -16,30 +16,38 @@ class RrbMcpToolConfiguration {
 
     private static final McpJsonMapper MCP_JSON_MAPPER = McpJsonMapper.createDefault();
 
-    private static final String TOOL_NAME = "get_rrb_pdf";
+    private static final String PDF_TOOL_NAME = "get_rrb_pdf";
 
-    private static final String TOOL_TITLE = "RRB (Regierungsratsbeschluss) PDF";
+    private static final String PDF_TOOL_TITLE = "RRB (Regierungsratsbeschluss) PDF";
 
-    private static final String TOOL_DESCRIPTION = "Lädt den Hauptbeschluss als PDF anhand von Jahr und RRB-Nummer.";
+    private static final String PDF_TOOL_DESCRIPTION = "Loest den Solothurner Hauptbeschluss anhand von Jahr und RRB-Nummer auf und liefert das Original-PDF fuer Download und Referenz.";
+
+    private static final String TEXT_TOOL_NAME = "get_rrb_text";
+
+    private static final String TEXT_TOOL_TITLE = "RRB (Regierungsratsbeschluss) Text";
+
+    private static final String TEXT_TOOL_DESCRIPTION = "Extrahiert den Text des Solothurner Hauptbeschlusses seitenweise aus dem Original-PDF und liefert zusaetzlich den verifizierten Link auf das Originaldokument.";
 
     private static final String YEAR_DESCRIPTION = "Vierstelliges Jahr des Regierungsratsbeschlusses.";
 
     private static final String RRB_NUMBER_DESCRIPTION = "RRB-Nummer innerhalb des angegebenen Jahres.";
 
     @Bean
-    List<McpServerFeatures.SyncToolSpecification> getRrbPdfToolSpecifications(RrbMcpHandler handler) {
-        return List.of(getRrbPdfToolSpecification(handler));
+    List<McpServerFeatures.SyncToolSpecification> getRrbToolSpecifications(RrbMcpHandler handler) {
+        return List.of(
+                getRrbPdfToolSpecification(handler),
+                getRrbTextToolSpecification(handler));
     }
 
     private McpServerFeatures.SyncToolSpecification getRrbPdfToolSpecification(RrbMcpHandler handler) {
         McpSchema.Tool tool = McpSchema.Tool.builder()
-                .name(TOOL_NAME)
-                .title(TOOL_TITLE)
-                .description(TOOL_DESCRIPTION)
+                .name(PDF_TOOL_NAME)
+                .title(PDF_TOOL_TITLE)
+                .description(PDF_TOOL_DESCRIPTION)
                 .inputSchema(MCP_JSON_MAPPER, inputSchemaJson())
-                .outputSchema(outputSchema())
+                .outputSchema(pdfOutputSchema())
                 .annotations(new McpSchema.ToolAnnotations(
-                        TOOL_TITLE,
+                        PDF_TOOL_TITLE,
                         Boolean.TRUE,
                         Boolean.FALSE,
                         Boolean.TRUE,
@@ -53,12 +61,34 @@ class RrbMcpToolConfiguration {
                 .build();
     }
 
+    private McpServerFeatures.SyncToolSpecification getRrbTextToolSpecification(RrbMcpHandler handler) {
+        McpSchema.Tool tool = McpSchema.Tool.builder()
+                .name(TEXT_TOOL_NAME)
+                .title(TEXT_TOOL_TITLE)
+                .description(TEXT_TOOL_DESCRIPTION)
+                .inputSchema(MCP_JSON_MAPPER, inputSchemaJson())
+                .outputSchema(textOutputSchema())
+                .annotations(new McpSchema.ToolAnnotations(
+                        TEXT_TOOL_TITLE,
+                        Boolean.TRUE,
+                        Boolean.FALSE,
+                        Boolean.TRUE,
+                        Boolean.TRUE,
+                        null))
+                .build();
+
+        return McpServerFeatures.SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler((exchange, request) -> handler.handleGetRrbText(request.arguments()))
+                .build();
+    }
+
     private String inputSchemaJson() {
         try {
             return MCP_JSON_MAPPER.writeValueAsString(inputSchema());
         }
         catch (IOException exception) {
-            throw new IllegalStateException("Input-Schema für get_rrb_pdf konnte nicht serialisiert werden.", exception);
+            throw new IllegalStateException("Input-Schema fuer die RRB-Tools konnte nicht serialisiert werden.", exception);
         }
     }
 
@@ -76,7 +106,7 @@ class RrbMcpToolConfiguration {
         return schema;
     }
 
-    private Map<String, Object> outputSchema() {
+    private Map<String, Object> pdfOutputSchema() {
         Map<String, Object> schema = new LinkedHashMap<>();
         schema.put("type", "object");
         schema.put("additionalProperties", false);
@@ -86,23 +116,34 @@ class RrbMcpToolConfiguration {
         properties.put("rrbNumber", integerProperty(RRB_NUMBER_DESCRIPTION));
         properties.put("sourcePageUrl", stringProperty("Öffentliche Detailseite des Beschlusses."));
         properties.put("publicPdfUrl", stringProperty("Direkter öffentlicher Download-Link des Hauptdokuments."));
-        properties.put("resourceUri", stringProperty("MCP-Resource-URI für das PDF."));
-        properties.put("filename", stringProperty("Dateiname des PDF-Dokuments."));
-        properties.put("mimeType", stringProperty("MIME-Type des eingebetteten Dokuments."));
-        properties.put("byteLength", integerProperty("Grösse des PDF in Bytes."));
+        properties.put("pdfResourceUri", stringProperty("MCP-Resource-URI für das PDF."));
+        properties.put("pdfMimeType", stringProperty("MIME-Type des PDF-Dokuments."));
         properties.put("errorCode", stringProperty("Stabiler Fehlercode bei fehlgeschlagenem Abruf."));
         properties.put("message", stringProperty("Menschenlesbare Fehlerbeschreibung."));
 
         schema.put("properties", properties);
-        schema.put("required", List.of(
-                "year",
-                "rrbNumber",
-                "sourcePageUrl",
-                "publicPdfUrl",
-                "resourceUri",
-                "filename",
-                "mimeType",
-                "byteLength"));
+        schema.put("required", List.of("year", "rrbNumber"));
+        return schema;
+    }
+
+    private Map<String, Object> textOutputSchema() {
+        Map<String, Object> schema = new LinkedHashMap<>();
+        schema.put("type", "object");
+        schema.put("additionalProperties", false);
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("year", integerProperty(YEAR_DESCRIPTION));
+        properties.put("rrbNumber", integerProperty(RRB_NUMBER_DESCRIPTION));
+        properties.put("sourcePageUrl", stringProperty("Öffentliche Detailseite des Beschlusses."));
+        properties.put("publicPdfUrl", stringProperty("Direkter öffentlicher Download-Link des Hauptdokuments."));
+        properties.put("filename", stringProperty("Dateiname des Hauptdokuments."));
+        properties.put("pageCount", integerProperty("Anzahl extrahierter PDF-Seiten."));
+        properties.put("chunks", chunksProperty());
+        properties.put("errorCode", stringProperty("Stabiler Fehlercode bei fehlgeschlagener Extraktion."));
+        properties.put("message", stringProperty("Menschenlesbare Fehlerbeschreibung."));
+
+        schema.put("properties", properties);
+        schema.put("required", List.of("year", "rrbNumber"));
         return schema;
     }
 
@@ -118,5 +159,27 @@ class RrbMcpToolConfiguration {
         property.put("type", "string");
         property.put("description", description);
         return property;
+    }
+
+    private Map<String, Object> chunksProperty() {
+        Map<String, Object> property = new LinkedHashMap<>();
+        property.put("type", "array");
+        property.put("description", "Seitenweise extrahierte Text-Chunks des Hauptdokuments.");
+        property.put("items", chunkItemSchema());
+        return property;
+    }
+
+    private Map<String, Object> chunkItemSchema() {
+        Map<String, Object> item = new LinkedHashMap<>();
+        item.put("type", "object");
+        item.put("additionalProperties", false);
+
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("pageNumber", integerProperty("1-basierte Seitennummer im PDF."));
+        properties.put("text", stringProperty("Extrahierter Text dieser PDF-Seite."));
+
+        item.put("properties", properties);
+        item.put("required", List.of("pageNumber", "text"));
+        return item;
     }
 }

@@ -5,10 +5,19 @@ record RrbDocument(
         int rrbNumber,
         String sourcePageUrl,
         String publicPdfUrl,
-        String resourceUri,
+        String pdfResourceUri,
         String filename,
-        String mimeType,
+        String pdfMimeType,
         byte[] pdfBytes) {
+
+    RrbDocument {
+        pdfBytes = pdfBytes.clone();
+    }
+
+    @Override
+    public byte[] pdfBytes() {
+        return pdfBytes.clone();
+    }
 
     long byteLength() {
         return pdfBytes.length;

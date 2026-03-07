@@ -14,6 +14,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import io.modelcontextprotocol.spec.McpSchema;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -34,7 +35,9 @@ import static org.assertj.core.api.Assertions.assertThat;
         })
 class RrbMcpHttpIntegrationTests {
 
-    private static final byte[] PDF_BYTES = "%PDF-1.7\nstub\n".getBytes(StandardCharsets.ISO_8859_1);
+    private static final byte[] PDF_BYTES = TestPdfFactory.createPdf(
+            "Beschluss 2026/292 Seite 1\nMassnahme A",
+            "Beschluss 2026/292 Seite 2\nMassnahme B");
 
     private static final JsonMapper JSON_MAPPER = JsonMapper.builder().findAndAddModules().build();
 
@@ -72,34 +75,79 @@ class RrbMcpHttpIntegrationTests {
         JsonNode toolsList = sendRequest(sessionId, """
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
                 """);
-        JsonNode tool = findByName(toolsList.at("/result/tools"), "get_rrb_pdf");
-        assertThat(tool.path("name").asText()).isEqualTo("get_rrb_pdf");
-        assertThat(tool.at("/inputSchema/properties/year/type").asText()).isEqualTo("integer");
-        assertThat(tool.at("/inputSchema/properties/year/description").asText())
-                .isEqualTo("Vierstelliges Jahr des Regierungsratsbeschlusses.");
-        assertThat(tool.at("/inputSchema/properties/rrbNumber/type").asText()).isEqualTo("integer");
-        assertThat(tool.at("/inputSchema/properties/rrbNumber/description").asText())
-                .isEqualTo("RRB-Nummer innerhalb des angegebenen Jahres.");
-        assertThat(tool.at("/inputSchema/required/0").asText()).isEqualTo("year");
-        assertThat(tool.at("/inputSchema/required/1").asText()).isEqualTo("rrbNumber");
-        assertThat(tool.at("/outputSchema/properties/publicPdfUrl/type").asText()).isEqualTo("string");
-        assertThat(tool.at("/outputSchema/properties/errorCode/type").asText()).isEqualTo("string");
-        assertThat(tool.at("/outputSchema/required/0").asText()).isEqualTo("year");
-        assertThat(tool.at("/annotations/readOnlyHint").asBoolean()).isTrue();
+        JsonNode pdfTool = findByName(toolsList.at("/result/tools"), "get_rrb_pdf");
+        assertThat(pdfTool.path("name").asText()).isEqualTo("get_rrb_pdf");
+        assertThat(pdfTool.at("/inputSchema/properties/year/type").asText()).isEqualTo("integer");
+        assertThat(pdfTool.at("/inputSchema/properties/rrbNumber/type").asText()).isEqualTo("integer");
+        assertThat(pdfTool.at("/outputSchema/properties/pdfResourceUri/type").asText()).isEqualTo("string");
+        assertThat(pdfTool.at("/outputSchema/properties/textResourceUri").isMissingNode()).isTrue();
+        assertThat(pdfTool.at("/outputSchema/properties/pageTextUriTemplate").isMissingNode()).isTrue();
+        assertThat(pdfTool.at("/outputSchema/properties/pageCount").isMissingNode()).isTrue();
+        assertThat(pdfTool.at("/annotations/readOnlyHint").asBoolean()).isTrue();
+
+        JsonNode textTool = findByName(toolsList.at("/result/tools"), "get_rrb_text");
+        assertThat(textTool.path("name").asText()).isEqualTo("get_rrb_text");
+        assertThat(textTool.at("/inputSchema/properties/year/type").asText()).isEqualTo("integer");
+        assertThat(textTool.at("/inputSchema/properties/rrbNumber/type").asText()).isEqualTo("integer");
+        assertThat(textTool.at("/outputSchema/properties/pageCount/type").asText()).isEqualTo("integer");
+        assertThat(textTool.at("/outputSchema/properties/chunks/type").asText()).isEqualTo("array");
+        assertThat(textTool.at("/outputSchema/properties/chunks/items/properties/pageNumber/type").asText())
+                .isEqualTo("integer");
+        assertThat(textTool.at("/annotations/readOnlyHint").asBoolean()).isTrue();
 
         JsonNode toolCall = sendRequest(sessionId, """
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_rrb_pdf","arguments":{"year":2026,"rrbNumber":292}}}
                 """);
         assertThat(toolCall.at("/result/content/0/type").asText()).isEqualTo("text");
-        assertThat(toolCall.at("/result/content/0/text").asText()).isEqualTo("RRB 2026/292 wurde als PDF geladen.");
+        assertThat(toolCall.at("/result/content/0/text").asText())
+                .isEqualTo("RRB 2026/292 wurde gefunden; verwende jetzt die PDF-Resource.");
         assertThat(toolCall.at("/result/structuredContent/sourcePageUrl").asText())
                 .isEqualTo("%s/beschlussnummer/2026_292/".formatted(baseUri));
         assertThat(toolCall.at("/result/structuredContent/publicPdfUrl").asText())
                 .isEqualTo("%s/beschlussnummer/2026_292/download/main-link/".formatted(baseUri));
+        assertThat(toolCall.at("/result/structuredContent/pdfResourceUri").asText())
+                .isEqualTo("rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf");
+        assertThat(toolCall.at("/result/structuredContent/pdfMimeType").asText()).isEqualTo("application/pdf");
+        assertThat(toolCall.at("/result/structuredContent/textResourceUri").isMissingNode()).isTrue();
+        assertThat(toolCall.at("/result/structuredContent/pageTextUriTemplate").isMissingNode()).isTrue();
         assertThat(toolCall.at("/result/content/1/type").asText()).isEqualTo("resource_link");
-        assertThat(toolCall.at("/result/content/2/type").asText()).isEqualTo("resource");
-        assertThat(Base64.getDecoder().decode(toolCall.at("/result/content/2/resource/blob").asText()))
-                .isEqualTo(PDF_BYTES);
+        assertThat(toolCall.at("/result/content/1/uri").asText())
+                .isEqualTo("%s/beschlussnummer/2026_292/download/main-link/".formatted(baseUri));
+        assertThat(toolCall.at("/result/content/2/type").asText()).isEqualTo("resource_link");
+        assertThat(toolCall.at("/result/content/2/uri").asText())
+                .isEqualTo("rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf");
+        assertThat(toolCall.at("/result/content/3").isMissingNode()).isTrue();
+
+        JsonNode textToolCall = sendRequest(sessionId, """
+                {"jsonrpc":"2.0","id":33,"method":"tools/call","params":{"name":"get_rrb_text","arguments":{"year":2026,"rrbNumber":292}}}
+                """);
+        assertThat(textToolCall.at("/result/content/0/type").asText()).isEqualTo("text");
+        assertThat(textToolCall.at("/result/content/0/text").asText())
+                .isEqualTo("RRB 2026/292 wurde als Text extrahiert; 2 Seiten bereit.");
+        assertThat(textToolCall.at("/result/content/1/type").asText()).isEqualTo("text");
+        assertThat(textToolCall.at("/result/content/1/text").asText())
+                .isEqualTo("PDF-Link: %s/beschlussnummer/2026_292/download/main-link/".formatted(baseUri));
+        assertThat(textToolCall.at("/result/content/2/type").asText()).isEqualTo("resource_link");
+        assertThat(textToolCall.at("/result/content/2/uri").asText())
+                .isEqualTo("%s/beschlussnummer/2026_292/download/main-link/".formatted(baseUri));
+        assertThat(textToolCall.at("/result/content/3/type").asText()).isEqualTo("text");
+        assertThat(textToolCall.at("/result/content/3/text").asText())
+                .contains("Seite 1", "Beschluss 2026/292 Seite 1", "Massnahme A");
+        assertThat(textToolCall.at("/result/content/4/type").asText()).isEqualTo("text");
+        assertThat(textToolCall.at("/result/content/4/text").asText())
+                .contains("Seite 2", "Beschluss 2026/292 Seite 2", "Massnahme B");
+        assertThat(textToolCall.at("/result/structuredContent/sourcePageUrl").asText())
+                .isEqualTo("%s/beschlussnummer/2026_292/".formatted(baseUri));
+        assertThat(textToolCall.at("/result/structuredContent/publicPdfUrl").asText())
+                .isEqualTo("%s/beschlussnummer/2026_292/download/main-link/".formatted(baseUri));
+        assertThat(textToolCall.at("/result/structuredContent/filename").asText()).isEqualTo("RRB__2026-292.pdf");
+        assertThat(textToolCall.at("/result/structuredContent/pageCount").asInt()).isEqualTo(2);
+        assertThat(textToolCall.at("/result/structuredContent/chunks/0/pageNumber").asInt()).isEqualTo(1);
+        assertThat(textToolCall.at("/result/structuredContent/chunks/0/text").asText())
+                .contains("Beschluss 2026/292 Seite 1", "Massnahme A");
+        assertThat(textToolCall.at("/result/structuredContent/chunks/1/pageNumber").asInt()).isEqualTo(2);
+        assertThat(textToolCall.at("/result/structuredContent/chunks/1/text").asText())
+                .contains("Beschluss 2026/292 Seite 2", "Massnahme B");
 
         JsonNode resourcesList = sendRequest(sessionId, """
                 {"jsonrpc":"2.0","id":4,"method":"resources/list","params":{}}
@@ -110,19 +158,19 @@ class RrbMcpHttpIntegrationTests {
         JsonNode resourceTemplatesList = sendRequest(sessionId, """
                 {"jsonrpc":"2.0","id":5,"method":"resources/templates/list","params":{}}
                 """);
-        JsonNode template = findByUriTemplate(
+        assertThat(resourceTemplatesList.at("/result/resourceTemplates").size()).isEqualTo(1);
+        JsonNode pdfTemplate = findByUriTemplate(
                 resourceTemplatesList.at("/result/resourceTemplates"),
                 "rrb://so.ch/regierungsratsbeschluss/{year}/{rrbNumber}/rrb.pdf");
-        assertThat(template.at("/name").asText()).isEqualTo("rrb_pdf");
-        assertThat(template.at("/mimeType").asText()).isEqualTo("application/pdf");
+        assertThat(pdfTemplate.at("/mimeType").asText()).isEqualTo("application/pdf");
 
-        JsonNode resourceRead = sendRequest(sessionId, """
+        JsonNode pdfResourceRead = sendRequest(sessionId, """
                 {"jsonrpc":"2.0","id":6,"method":"resources/read","params":{"uri":"rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf"}}
                 """);
-        assertThat(resourceRead.at("/result/contents/0/uri").asText())
+        assertThat(pdfResourceRead.at("/result/contents/0/uri").asText())
                 .isEqualTo("rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf");
-        assertThat(resourceRead.at("/result/contents/0/mimeType").asText()).isEqualTo("application/pdf");
-        assertThat(Base64.getDecoder().decode(resourceRead.at("/result/contents/0/blob").asText()))
+        assertThat(pdfResourceRead.at("/result/contents/0/mimeType").asText()).isEqualTo("application/pdf");
+        assertThat(Base64.getDecoder().decode(pdfResourceRead.at("/result/contents/0/blob").asText()))
                 .isEqualTo(PDF_BYTES);
     }
 
@@ -143,7 +191,37 @@ class RrbMcpHttpIntegrationTests {
         assertThat(toolCall.at("/result/structuredContent/errorCode").asText()).isEqualTo("NOT_FOUND");
         assertThat(toolCall.at("/result/structuredContent/message").asText()).isNotBlank();
         assertThat(toolCall.at("/result/content/0/type").asText()).isEqualTo("text");
-        assertThat(toolCall.at("/result/content/0/text").asText()).contains("RRB konnte nicht geladen werden");
+        assertThat(toolCall.at("/result/content/0/text").asText()).contains("RRB konnte nicht aufgeloest werden");
+
+        JsonNode textToolCall = sendRequest(sessionId, """
+                {"jsonrpc":"2.0","id":17,"method":"tools/call","params":{"name":"get_rrb_text","arguments":{"year":2026,"rrbNumber":999}}}
+                """);
+        assertThat(textToolCall.at("/result/isError").asBoolean()).isTrue();
+        assertThat(textToolCall.at("/result/structuredContent/year").asInt()).isEqualTo(2026);
+        assertThat(textToolCall.at("/result/structuredContent/rrbNumber").asInt()).isEqualTo(999);
+        assertThat(textToolCall.at("/result/structuredContent/errorCode").asText()).isEqualTo("NOT_FOUND");
+        assertThat(textToolCall.at("/result/content/0/text").asText()).contains("RRB-Text konnte nicht extrahiert werden");
+        assertThat(textToolCall.at("/result/content/1").isMissingNode()).isTrue();
+    }
+
+    @Test
+    void removedTextResourcesReturnStandardResourceNotFound() throws Exception {
+        String sessionId = initializeSession();
+        sendNotification(sessionId, """
+                {"jsonrpc":"2.0","method":"notifications/initialized"}
+                """);
+
+        JsonNode missingTextResource = sendRequest(sessionId, """
+                {"jsonrpc":"2.0","id":8,"method":"resources/read","params":{"uri":"rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.txt"}}
+                """);
+        assertThat(missingTextResource.at("/error/code").asInt()).isEqualTo(McpSchema.ErrorCodes.RESOURCE_NOT_FOUND);
+        assertThat(missingTextResource.at("/error/message").asText()).isEqualTo("Resource not found");
+
+        JsonNode missingPageResource = sendRequest(sessionId, """
+                {"jsonrpc":"2.0","id":9,"method":"resources/read","params":{"uri":"rrb://so.ch/regierungsratsbeschluss/2026/292/pages/2.txt"}}
+                """);
+        assertThat(missingPageResource.at("/error/code").asInt()).isEqualTo(McpSchema.ErrorCodes.RESOURCE_NOT_FOUND);
+        assertThat(missingPageResource.at("/error/message").asText()).isEqualTo("Resource not found");
     }
 
     private String initializeSession() throws Exception {
@@ -245,8 +323,13 @@ class RrbMcpHttpIntegrationTests {
                     exchange,
                     200,
                     "application/pdf",
-                    "%PDF-1.7\nbeilage\n".getBytes(StandardCharsets.ISO_8859_1),
+                    PDF_BYTES,
                     "Content-Disposition", "attachment; filename=\"RRB-Beilage__2026-292-01.pdf\""));
+            server.createContext("/beschlussnummer/2026_999/", exchange -> writeResponse(
+                    exchange,
+                    404,
+                    "text/plain",
+                    new byte[0]));
             return server;
         }
         catch (IOException exception) {

@@ -55,9 +55,9 @@ class RrbFetchServiceTests {
         assertThat(document.rrbNumber()).isEqualTo(292);
         assertThat(document.sourcePageUrl()).isEqualTo(sourceUrl(2026, 292));
         assertThat(document.publicPdfUrl()).isEqualTo(pdfUrl(2026, 292, "main-link"));
-        assertThat(document.resourceUri()).isEqualTo("rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf");
+        assertThat(document.pdfResourceUri()).isEqualTo("rrb://so.ch/regierungsratsbeschluss/2026/292/rrb.pdf");
         assertThat(document.filename()).isEqualTo("RRB__2026-292.pdf");
-        assertThat(document.mimeType()).isEqualTo("application/pdf");
+        assertThat(document.pdfMimeType()).isEqualTo("application/pdf");
         assertThat(document.pdfBytes()).isEqualTo(PDF_BYTES);
     }
 
@@ -108,7 +108,8 @@ class RrbFetchServiceTests {
         registerHtml(
                 "/beschlussnummer/2024_50/",
                 detailPageWithDocuments("<li><a href=\"/beschlussnummer/2024_50/download/main/\">RRB</a></li>"));
-        register("/beschlussnummer/2024_50/download/main/", 200, "application/octet-stream", "not-a-pdf".getBytes(StandardCharsets.UTF_8));
+        register("/beschlussnummer/2024_50/download/main/", 200, "application/octet-stream",
+                "not-a-pdf".getBytes(StandardCharsets.UTF_8));
 
         assertThatThrownBy(() -> fetchService.fetch(2024, 50))
                 .isInstanceOf(RrbFetchException.class)
